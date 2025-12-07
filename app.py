@@ -1,145 +1,104 @@
 import streamlit as st
 import requests
 import random
-from PIL import Image, ImageDraw, ImageFont, ImageFilter
+from PIL import Image, ImageDraw, ImageFilter
 import numpy as np
 import io
 
-# -------------------------
-# Weather → Color Mapping
-# -------------------------
-WEATHER_COLOR_MAP = {
-    "sunny":  ("#FFB300", "#FF6F00"),     # bright warm yellow / orange
-    "cloudy": ("#9E9E9E", "#616161"),     # gray tones
-    "rain":   ("#4FC3F7", "#0288D1"),     # rain blues
-    "snow":   ("#E1F5FE", "#B3E5FC"),     # soft icy blues
-    "storm":  ("#455A64", "#263238"),     # dark stormy tones
-    "fog":    ("#CFD8DC", "#B0BEC5"),
+# -----------------------------
+# Weather → Search Keyword
+# -----------------------------
+WEATHER_KEYWORD = {
+    "Clear": "sunny",
+    "Clouds": "cloudy",
+    "Rain": "rainy",
+    "Drizzle": "drizzle",
+    "Thunderstorm": "storm",
+    "Snow": "snow",
+    "Mist": "mist",
+    "Fog": "fog"
 }
 
-# -------------------------
-# Detect weather category
-# -------------------------
-def classify_weather(weather_code):
-    # Weather codes from Open-Meteo
-    if weather_code in [0, 1]:
-        return "sunny"
-    if weather_code in [2, 3]:
-        return "cloudy"
-    if weather_code in [51, 53, 55, 61, 63, 65, 80, 81, 82]:
-        return "rain"
-    if weather_code in [71, 73, 75, 77, 85, 86]:
-        return "snow"
-    if weather_code in [95, 96, 99]:
-        return "storm"
-    if weather_code in [45, 48]:
-        return "fog"
-    return "cloudy"
+# -----------------------------
+# Get Weather from OpenWeather
+# -----------------------------
+def get_weather(city, api_key):
+    url = f"http://api.openweathermap.org/data/2.5/weather?q={city}&appid={api_key}"
+    data = requests.get(url).json()
 
-# -------------------------
-# Get weather from Open-Meteo API
-# -------------------------
-def get_weather(city):
-    try:
-        # Geocoding API to get coordinates
-        geo = requests.get(
-            f"https://geocoding-api.open-meteo.com/v1/search?name={city}&count=1"
-        ).json()
-
-        if "results" not in geo:
-            return None, None
-
-        lat = geo["results"][0]["latitude"]
-        lon = geo["results"][0]["longitude"]
-
-        # Get actual weather
-        weather_data = requests.get(
-            f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current_weather=true"
-        ).json()
-
-        weather_code = weather_data["current_weather"]["weathercode"]
-        return weather_code, weather_data
-    except:
+    if data.get("cod") != 200:
         return None, None
 
-# -------------------------
-# Generate artistic poster
-# -------------------------
-def generate_poster(city, weather_category):
-    # Base image - large for clarity
-    width = 900
-    height = 1400
-    img = Image.new("RGB", (width, height), color="white")
-    draw = ImageDraw.Draw(img)
+    weather_type = data["weather"][0]["main"]
+    return weather_type, data
 
-    # Pick color by weather
-    c1, c2 = WEATHER_COLOR_MAP[weather_category]
+# -----------------------------
+# Get Photo from Unsplash
+# -----------------------------
+def get_photo(city, weather, unsplash_key):
+    keyword = WEATHER_KEYWORD.get(weather, "city")
+    query = f"{city} {keyword}"
 
-    # Strong graphic gradient
-    for y in range(height):
-        ratio = y / height
-        r = int(int(c1[1:3], 16) * (1 - ratio) + int(c2[1:3], 16) * ratio)
-        g = int(int(c1[3:5], 16) * (1 - ratio) + int(c2[3:5], 16) * ratio)
-        b = int(int(c1[5:7], 16) * (1 - ratio) + int(c2[5:7], 16) * ratio)
-        draw.line([(0, y), (width, y)], fill=(r, g, b))
+    url = f"https://api.unsplash.com/search/photos?query={query}&client_id={unsplash_key}&orientation=portrait"
 
-    # Random abstract shapes for uniqueness
-    for _ in range(10):
-        shape_type = random.choice(["circle", "rect"])
+    data = requests.get(url).json()
 
-        x1 = random.randint(0, width)
-        y1 = random.randint(0, height)
-        x2 = x1 + random.randint(150, 400)
-        y2 = y1 + random.randint(150, 400)
+    if "results" not in data or len(data["results"]) == 0:
+        return None
 
-        shape_color = tuple(np.random.randint(0, 255, 3))
-
-        if shape_type == "circle":
-            draw.ellipse([x1, y1, x2, y2], fill=shape_color + (80,))
-        else:
-            draw.rectangle([x1, y1, x2, y2], fill=shape_color + (80,))
-
-    # Text layout: strong typography design
-    try:
-        font_city = ImageFont.truetype("arial.ttf", 120)
-        font_weather = ImageFont.truetype("arial.ttf", 60)
-    except:
-        # fallback
-        font_city = ImageFont.load_default()
-        font_weather = ImageFont.load_default()
-
-    draw.text((60, 60), city.upper(), fill="white", font=font_city)
-    draw.text((60, 220), f"Weather: {weather_category}", fill="white", font=font_weather)
-
-    # Apply grain texture for design feel
-    grain = np.random.normal(0, 25, (height, width, 3)).astype(np.int16)
-    img_np = np.array(img).astype(np.int16)
-    img_np = np.clip(img_np + grain, 0, 255).astype(np.uint8)
-    img = Image.fromarray(img_np)
-
+    # Randomly choose one image for uniqueness
+    photo_url = random.choice(data["results"])["urls"]["regular"]
+    img = Image.open(requests.get(photo_url, stream=True).raw)
     return img
 
 
-# -------------------------
-# Streamlit UI
-# -------------------------
-st.title("City Weather Design Poster Generator")
-st.write("Generates a unique high-design poster for each city based on real-time weather.")
+# -----------------------------
+# Add subtle grain + overlay
+# -----------------------------
+def stylize(img):
+    img = img.resize((900, 1400))
 
-city = st.text_input("Enter a city name", "Seoul")
+    # Light grain
+    np_img = np.array(img).astype(np.int16)
+    grain = np.random.normal(0, 10, np_img.shape).astype(np.int16)
+    np_img = np.clip(np_img + grain, 0, 255).astype(np.uint8)
+    img = Image.fromarray(np_img)
 
-if st.button("Generate Poster"):
-    code, raw = get_weather(city)
+    # Transparent overlay for artistic feel
+    overlay = Image.new("RGBA", img.size, (255, 255, 255, 20))
+    img = Image.alpha_composite(img.convert("RGBA"), overlay)
 
-    if code is None:
-        st.error("City not found or weather API error.")
+    return img.convert("RGB")
+
+
+# -----------------------------
+# Streamlit Interface
+# -----------------------------
+st.title("Realistic City Weather Image Generator")
+st.write("Enter your API keys to generate a unique real-world photo for each city.")
+
+ow_key = st.text_input("OpenWeather API Key", type="password")
+unsplash_key = st.text_input("Unsplash API Key", type="password")
+city = st.text_input("City Name", "Seoul")
+
+if st.button("Generate Image"):
+    if not ow_key or not unsplash_key:
+        st.error("Please enter both OpenWeather and Unsplash API keys.")
     else:
-        category = classify_weather(code)
-        poster = generate_poster(city, category)
+        weather_type, raw = get_weather(city, ow_key)
 
-        st.image(poster, caption=f"{city} – {category} weather", use_column_width=True)
+        if weather_type is None:
+            st.error("City not found or wrong API key.")
+        else:
+            img = get_photo(city, weather_type, unsplash_key)
 
-        # Download button
-        buf = io.BytesIO()
-        poster.save(buf, format="PNG")
-        st.download_button("Download Poster", buf.getvalue(), file_name=f"{city}_poster.png")
+            if img is None:
+                st.error("No matching images found on Unsplash.")
+            else:
+                final_img = stylize(img)
+
+                st.image(final_img, caption=f"{city} – {weather_type} Weather")
+
+                buf = io.BytesIO()
+                final_img.save(buf, format="PNG")
+                st.download_button("Download Image", buf.getvalue(), file_name=f"{city}_weather.png")
