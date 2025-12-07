@@ -1,133 +1,122 @@
 import streamlit as st
 import requests
-from PIL import Image, ImageDraw, ImageFont
 from io import BytesIO
-import base64
+from PIL import Image, ImageDraw, ImageFont
 
-# ---------------------------
-# Weather API
-# ---------------------------
-def get_weather(city, api_key):
-    url = (
-        f"https://api.openweathermap.org/data/2.5/weather?q={city}"
-        f"&appid={api_key}&units=metric"
-    )
-    response = requests.get(url).json()
+# -----------------------------
+# Weather → Visual Style Mapping
+# -----------------------------
+def get_weather_style(condition):
+    condition = condition.lower()
+    if "rain" in condition:
+        return {
+            "bg_color": (40, 40, 60),
+            "accent": (120, 120, 255),
+            "icon": "🌧️"
+        }
+    elif "cloud" in condition:
+        return {
+            "bg_color": (60, 60, 60),
+            "accent": (200, 200, 200),
+            "icon": "☁️"
+        }
+    elif "clear" in condition:
+        return {
+            "bg_color": (255, 200, 80),
+            "accent": (255, 255, 255),
+            "icon": "☀️"
+        }
+    elif "snow" in condition:
+        return {
+            "bg_color": (230, 240, 255),
+            "accent": (120, 160, 255),
+            "icon": "❄️"
+        }
+    else:
+        return {
+            "bg_color": (80, 80, 80),
+            "accent": (255, 255, 255),
+            "icon": "🌈"
+        }
 
-    if response.get("cod") != 200:
-        return None  # invalid city
+# -----------------------------
+# Generate Poster (PIL)
+# -----------------------------
+def generate_poster(city, temp, condition, width, height):
+    style = get_weather_style(condition)
 
-    return {
-        "city": city,
-        "temp": response["main"]["temp"],
-        "description": response["weather"][0]["description"],
-    }
-
-
-# ---------------------------
-# Generate Realistic Background Image (OpenAI)
-# ---------------------------
-def generate_realistic_image(weather_text, openai_key):
-    url = "https://api.openai.com/v1/images/generations"
-
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {openai_key}"
-    }
-
-    prompt = (
-        f"Ultra-realistic landscape or city photograph showing the weather condition: {weather_text}. "
-        "Natural light, cinematic photography, high detail, 4k aesthetic, atmospheric mood."
-    )
-
-    payload = {
-        "model": "gpt-image-1",
-        "prompt": prompt,
-        "size": "1024x1024"
-    }
-
-    response = requests.post(url, json=payload, headers=headers).json()
-    image_base64 = response["data"][0]["b64_json"]
-
-    # Convert base64 → PIL image
-    return Image.open(BytesIO(base64.b64decode(image_base64)))
-
-
-# ---------------------------
-# Draw Text Functions
-# ---------------------------
-def draw_title(draw, W, text):
-    try:
-        font = ImageFont.truetype("arial.ttf", 80)
-    except:
-        font = ImageFont.load_default()
-
-    bbox = draw.textbbox((0, 0), text, font=font)
-    tw = bbox[2] - bbox[0]
-    draw.text(((W - tw) / 2, 40), text, font=font, fill="white")
-
-
-def draw_weather(draw, W, H, weather):
-    info = f"{weather['city']} | {weather['temp']}°C | {weather['description'].title()}"
-
-    try:
-        font = ImageFont.truetype("arial.ttf", 50)
-    except:
-        font = ImageFont.load_default()
-
-    bbox = draw.textbbox((0, 0), info, font=font)
-    tw = bbox[2] - bbox[0]
-    draw.text(((W - tw) / 2, H - 120), info, font=font, fill="white")
-
-
-# ---------------------------
-# Generate Poster
-# ---------------------------
-def generate_poster(weather, width, height, openai_key):
-    # Generate realistic weather image
-    weather_text = f"{weather['description']} in {weather['city']}"
-    bg = generate_realistic_image(weather_text, openai_key)
-    bg = bg.resize((width, height))
-
-    img = bg.copy()
+    # Create Canvas
+    img = Image.new("RGB", (width, height), style["bg_color"])
     draw = ImageDraw.Draw(img)
 
-    draw_title(draw, width, "Weather Poster")
-    draw_weather(draw, width, height, weather)
+    # Load Default Font
+    font_title = ImageFont.load_default()
+    font_small = ImageFont.load_default()
+
+    # Draw Title
+    title_text = f"{style['icon']} {condition.capitalize()}"
+    draw.text((width//2 - 80, 40), title_text, fill=style["accent"], font=font_title)
+
+    # Temperature (large)
+    draw.text((width//2 - 40, height//2 - 20), f"{temp}°C",
+              fill=style["accent"], font=font_title)
+
+    # City label
+    draw.text((20, height - 40), f"{city}", fill="white", font=font_small)
+
+    # Weather Info
+    draw.text((20, height - 20), f"{condition.capitalize()}", fill="white", font=font_small)
 
     return img
 
+# -----------------------------
+# PIL → Bytes
+# -----------------------------
+def poster_to_bytes(poster):
+    buffer = BytesIO()
+    poster.save(buffer, format="PNG")
+    return buffer.getvalue()
 
-# ---------------------------
+
+# -----------------------------
 # Streamlit UI
-# ---------------------------
+# -----------------------------
 st.set_page_config(page_title="Weather Poster Generator", layout="centered")
-st.title("🌤️ Weather-Driven Realistic Poster")
 
-open_api = st.text_input("Enter your OpenWeather API Key")
-openai_key = st.text_input("Enter your OpenAI API Key (for realistic image)")
-city = st.text_input("City Name", "Seoul")
+st.title("🌤️ Weather-Based Generative Poster")
 
-width = st.slider("Poster Width", 400, 1400, 800)
-height = st.slider("Poster Height", 400, 1600, 1000)
+st.sidebar.header("Configuration")
 
-if st.button("Generate Poster"):
-    if not open_api or not openai_key:
-        st.error("Please enter both API keys.")
+api_key = st.sidebar.text_input("Enter your OpenWeather API Key:", type="password")
+city = st.sidebar.text_input("City Name", "Guangdong")
+
+width = st.sidebar.slider("Poster Width", 400, 1200, 600)
+height = st.sidebar.slider("Poster Height", 400, 1600, 800)
+
+if st.sidebar.button("Generate Poster"):
+    if not api_key:
+        st.error("Please enter your API key.")
     else:
-        weather = get_weather(city, open_api)
+        # Request Weather Data
+        url = f"https://api.openweathermap.org/data/2.5/weather?q={city}&appid={api_key}&units=metric"
+        response = requests.get(url)
 
-        if weather is None:
-            st.error("City not found. Try again.")
+        if response.status_code != 200:
+            st.error("❌ API request failed. Please check your city name or API key.")
         else:
-            st.success("Weather fetched! Generating AI poster...")
-            poster = generate_poster(weather, width, height, openai_key)
+            data = response.json()
+            temp = data["main"]["temp"]
+            condition = data["weather"][0]["description"]
 
-            st.image(poster, caption="Generated Weather Poster")
+            poster = generate_poster(city, temp, condition, width, height)
+            byte_data = poster_to_bytes(poster)
+
+            st.image(byte_data, caption=f"{city} | {temp}°C | {condition}")
+
+            # Provide Download Button
             st.download_button(
-                "Download Poster",
-                data=poster_to_bytes := BytesIO(),
-                file_name="weather_poster.png",
-                mime="image/png",
+                label="Download Poster",
+                data=byte_data,
+                file_name=f"{city}_weather_poster.png",
+                mime="image/png"
             )
-            poster.save(poster_to_bytes, format="PNG")
