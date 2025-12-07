@@ -1,65 +1,95 @@
 import streamlit as st
-from PIL import Image, ImageDraw, ImageFont
 import requests
+from PIL import Image, ImageDraw, ImageFont
 from io import BytesIO
+import base64
 
-# =========================
-#   Font Loader
-# =========================
-def load_font(size):
-    try:
-        return ImageFont.truetype("arial.ttf", size)
-    except:
-        return ImageFont.load_default()
-
-
-# =========================
-#   Weather API Function
-# =========================
-def fetch_weather(city, api_key):
+# ---------------------------
+# Weather API
+# ---------------------------
+def get_weather(city, api_key):
     url = (
-        f"http://api.openweathermap.org/data/2.5/weather?"
-        f"q={city}&appid={api_key}&units=metric"
+        f"https://api.openweathermap.org/data/2.5/weather?q={city}"
+        f"&appid={api_key}&units=metric"
     )
+    response = requests.get(url).json()
 
-    response = requests.get(url)
-    data = response.json()
+    if response.get("cod") != 200:
+        return None  # invalid city
 
     return {
         "city": city,
-        "temp": data["main"]["temp"],
-        "description": data["weather"][0]["description"].title(),
+        "temp": response["main"]["temp"],
+        "description": response["weather"][0]["description"],
     }
 
 
-# =========================
-#   Draw Title
-# =========================
+# ---------------------------
+# Generate Realistic Background Image (OpenAI)
+# ---------------------------
+def generate_realistic_image(weather_text, openai_key):
+    url = "https://api.openai.com/v1/images/generations"
+
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {openai_key}"
+    }
+
+    prompt = (
+        f"Ultra-realistic landscape or city photograph showing the weather condition: {weather_text}. "
+        "Natural light, cinematic photography, high detail, 4k aesthetic, atmospheric mood."
+    )
+
+    payload = {
+        "model": "gpt-image-1",
+        "prompt": prompt,
+        "size": "1024x1024"
+    }
+
+    response = requests.post(url, json=payload, headers=headers).json()
+    image_base64 = response["data"][0]["b64_json"]
+
+    # Convert base64 → PIL image
+    return Image.open(BytesIO(base64.b64decode(image_base64)))
+
+
+# ---------------------------
+# Draw Text Functions
+# ---------------------------
 def draw_title(draw, W, text):
-    font = load_font(80)
+    try:
+        font = ImageFont.truetype("arial.ttf", 80)
+    except:
+        font = ImageFont.load_default()
+
     bbox = draw.textbbox((0, 0), text, font=font)
     tw = bbox[2] - bbox[0]
-    draw.text(((W - tw) / 2, 50), text, font=font, fill="white")
+    draw.text(((W - tw) / 2, 40), text, font=font, fill="white")
 
 
-# =========================
-#   Draw Weather Text
-# =========================
 def draw_weather(draw, W, H, weather):
-    font = load_font(40)
-    text = f"{weather['city']} | {weather['temp']}°C | {weather['description']}"
+    info = f"{weather['city']} | {weather['temp']}°C | {weather['description'].title()}"
 
-    bbox = draw.textbbox((0, 0), text, font=font)
+    try:
+        font = ImageFont.truetype("arial.ttf", 50)
+    except:
+        font = ImageFont.load_default()
+
+    bbox = draw.textbbox((0, 0), info, font=font)
     tw = bbox[2] - bbox[0]
+    draw.text(((W - tw) / 2, H - 120), info, font=font, fill="white")
 
-    draw.text(((W - tw) / 2, H - 120), text, font=font, fill="white")
 
+# ---------------------------
+# Generate Poster
+# ---------------------------
+def generate_poster(weather, width, height, openai_key):
+    # Generate realistic weather image
+    weather_text = f"{weather['description']} in {weather['city']}"
+    bg = generate_realistic_image(weather_text, openai_key)
+    bg = bg.resize((width, height))
 
-# =========================
-#   Generate Poster
-# =========================
-def generate_poster(weather, width, height):
-    img = Image.new("RGB", (width, height), (30, 30, 30))
+    img = bg.copy()
     draw = ImageDraw.Draw(img)
 
     draw_title(draw, width, "Weather Poster")
@@ -68,27 +98,36 @@ def generate_poster(weather, width, height):
     return img
 
 
-# =========================
-#   Streamlit UI
-# =========================
-st.set_page_config(page_title="Weather Poster", layout="wide")
+# ---------------------------
+# Streamlit UI
+# ---------------------------
+st.set_page_config(page_title="Weather Poster Generator", layout="centered")
+st.title("🌤️ Weather-Driven Realistic Poster")
 
-st.title("🌤️ Weather-Driven Generative Poster")
-
-api_key = st.text_input("Enter your OpenWeather API Key")
+open_api = st.text_input("Enter your OpenWeather API Key")
+openai_key = st.text_input("Enter your OpenAI API Key (for realistic image)")
 city = st.text_input("City Name", "Seoul")
 
-width = st.slider("Poster Width", 400, 2000, 800)
-height = st.slider("Poster Height", 400, 2000, 1000)
+width = st.slider("Poster Width", 400, 1400, 800)
+height = st.slider("Poster Height", 400, 1600, 1000)
 
 if st.button("Generate Poster"):
-    if not api_key:
-        st.error("❗ Please enter your OpenWeather API key.")
+    if not open_api or not openai_key:
+        st.error("Please enter both API keys.")
     else:
-        try:
-            weather = fetch_weather(city, api_key)
-            poster = generate_poster(weather, width, height)
-            st.image(poster, caption="Generated Poster")
+        weather = get_weather(city, open_api)
 
-        except Exception as e:
-            st.error(f"Error: {e}")
+        if weather is None:
+            st.error("City not found. Try again.")
+        else:
+            st.success("Weather fetched! Generating AI poster...")
+            poster = generate_poster(weather, width, height, openai_key)
+
+            st.image(poster, caption="Generated Weather Poster")
+            st.download_button(
+                "Download Poster",
+                data=poster_to_bytes := BytesIO(),
+                file_name="weather_poster.png",
+                mime="image/png",
+            )
+            poster.save(poster_to_bytes, format="PNG")
