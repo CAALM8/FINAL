@@ -1,114 +1,145 @@
 import streamlit as st
 import requests
-from io import BytesIO
-from PIL import Image, ImageDraw, ImageFont
+import random
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
+import numpy as np
+import io
 
+# -------------------------
+# Weather → Color Mapping
+# -------------------------
+WEATHER_COLOR_MAP = {
+    "sunny":  ("#FFB300", "#FF6F00"),     # bright warm yellow / orange
+    "cloudy": ("#9E9E9E", "#616161"),     # gray tones
+    "rain":   ("#4FC3F7", "#0288D1"),     # rain blues
+    "snow":   ("#E1F5FE", "#B3E5FC"),     # soft icy blues
+    "storm":  ("#455A64", "#263238"),     # dark stormy tones
+    "fog":    ("#CFD8DC", "#B0BEC5"),
+}
 
-# ---------------------------
-# Get weather data
-# ---------------------------
-def get_weather(api_key, city):
-    url = f"https://api.openweathermap.org/data/2.5/weather?q={city}&appid={api_key}&units=metric"
-    response = requests.get(url)
-    return response.json()
+# -------------------------
+# Detect weather category
+# -------------------------
+def classify_weather(weather_code):
+    # Weather codes from Open-Meteo
+    if weather_code in [0, 1]:
+        return "sunny"
+    if weather_code in [2, 3]:
+        return "cloudy"
+    if weather_code in [51, 53, 55, 61, 63, 65, 80, 81, 82]:
+        return "rain"
+    if weather_code in [71, 73, 75, 77, 85, 86]:
+        return "snow"
+    if weather_code in [95, 96, 99]:
+        return "storm"
+    if weather_code in [45, 48]:
+        return "fog"
+    return "cloudy"
 
-
-# ---------------------------
-# Get real photo from Pexels API
-# ---------------------------
-def get_weather_photo(condition, pexels_key):
-    keyword = "weather"
-
-    if "clear" in condition.lower():
-        keyword = "sunny sky"
-    elif "cloud" in condition.lower():
-        keyword = "cloudy sky"
-    elif "rain" in condition.lower():
-        keyword = "rain storm"
-    elif "snow" in condition.lower():
-        keyword = "snow landscape"
-    elif "fog" in condition.lower() or "mist" in condition.lower():
-        keyword = "fog landscape"
-    elif "thunder" in condition.lower():
-        keyword = "thunderstorm"
-
-    headers = {
-        "Authorization": pexels_key
-    }
-
-    search_url = f"https://api.pexels.com/v1/search?query={keyword}&per_page=1"
-    res = requests.get(search_url, headers=headers).json()
-
-    if "photos" not in res or len(res["photos"]) == 0:
-        raise Exception("No image found")
-
-    img_url = res["photos"][0]["src"]["large"]
-
-    img_data = requests.get(img_url).content
-    return Image.open(BytesIO(img_data))
-
-
-# ---------------------------
-# Generate Final Poster
-# ---------------------------
-def generate_poster(weather, city, width, height, pexels_key):
-    condition = weather["weather"][0]["description"]
-    temperature = weather["main"]["temp"]
-
-    background = get_weather_photo(condition, pexels_key)
-    background = background.resize((width, height))
-
-    draw = ImageDraw.Draw(background)
-
-    # Fonts
+# -------------------------
+# Get weather from Open-Meteo API
+# -------------------------
+def get_weather(city):
     try:
-        font_title = ImageFont.truetype("arial.ttf", 50)
-        font_text = ImageFont.truetype("arial.ttf", 32)
+        # Geocoding API to get coordinates
+        geo = requests.get(
+            f"https://geocoding-api.open-meteo.com/v1/search?name={city}&count=1"
+        ).json()
+
+        if "results" not in geo:
+            return None, None
+
+        lat = geo["results"][0]["latitude"]
+        lon = geo["results"][0]["longitude"]
+
+        # Get actual weather
+        weather_data = requests.get(
+            f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current_weather=true"
+        ).json()
+
+        weather_code = weather_data["current_weather"]["weathercode"]
+        return weather_code, weather_data
     except:
-        font_title = ImageFont.load_default()
-        font_text = ImageFont.load_default()
+        return None, None
 
-    # Text
-    text_title = "Weather Poster"
-    text_info = f"{city} | {temperature}°C | {condition.capitalize()}"
+# -------------------------
+# Generate artistic poster
+# -------------------------
+def generate_poster(city, weather_category):
+    # Base image - large for clarity
+    width = 900
+    height = 1400
+    img = Image.new("RGB", (width, height), color="white")
+    draw = ImageDraw.Draw(img)
 
-    draw.text((40, 40), text_title, font=font_title, fill="white")
-    draw.text((40, height - 80), text_info, font=font_text, fill="white")
+    # Pick color by weather
+    c1, c2 = WEATHER_COLOR_MAP[weather_category]
 
-    return background
+    # Strong graphic gradient
+    for y in range(height):
+        ratio = y / height
+        r = int(int(c1[1:3], 16) * (1 - ratio) + int(c2[1:3], 16) * ratio)
+        g = int(int(c1[3:5], 16) * (1 - ratio) + int(c2[3:5], 16) * ratio)
+        b = int(int(c1[5:7], 16) * (1 - ratio) + int(c2[5:7], 16) * ratio)
+        draw.line([(0, y), (width, y)], fill=(r, g, b))
+
+    # Random abstract shapes for uniqueness
+    for _ in range(10):
+        shape_type = random.choice(["circle", "rect"])
+
+        x1 = random.randint(0, width)
+        y1 = random.randint(0, height)
+        x2 = x1 + random.randint(150, 400)
+        y2 = y1 + random.randint(150, 400)
+
+        shape_color = tuple(np.random.randint(0, 255, 3))
+
+        if shape_type == "circle":
+            draw.ellipse([x1, y1, x2, y2], fill=shape_color + (80,))
+        else:
+            draw.rectangle([x1, y1, x2, y2], fill=shape_color + (80,))
+
+    # Text layout: strong typography design
+    try:
+        font_city = ImageFont.truetype("arial.ttf", 120)
+        font_weather = ImageFont.truetype("arial.ttf", 60)
+    except:
+        # fallback
+        font_city = ImageFont.load_default()
+        font_weather = ImageFont.load_default()
+
+    draw.text((60, 60), city.upper(), fill="white", font=font_city)
+    draw.text((60, 220), f"Weather: {weather_category}", fill="white", font=font_weather)
+
+    # Apply grain texture for design feel
+    grain = np.random.normal(0, 25, (height, width, 3)).astype(np.int16)
+    img_np = np.array(img).astype(np.int16)
+    img_np = np.clip(img_np + grain, 0, 255).astype(np.uint8)
+    img = Image.fromarray(img_np)
+
+    return img
 
 
-# ---------------------------
+# -------------------------
 # Streamlit UI
-# ---------------------------
-st.title("🌤 Realistic Weather Poster Generator (Pexels Version)")
+# -------------------------
+st.title("City Weather Design Poster Generator")
+st.write("Generates a unique high-design poster for each city based on real-time weather.")
 
-weather_key = st.text_input("Enter your OpenWeather API Key")
-pexels_key = st.text_input("Enter your FREE Pexels API Key")
-city = st.text_input("City Name", "Seoul")
-
-width = st.slider("Poster Width", 600, 1600, 900)
-height = st.slider("Poster Height", 600, 1600, 1200)
+city = st.text_input("Enter a city name", "Seoul")
 
 if st.button("Generate Poster"):
-    if not weather_key or not pexels_key:
-        st.error("Please enter ALL API keys.")
+    code, raw = get_weather(city)
+
+    if code is None:
+        st.error("City not found or weather API error.")
     else:
-        with st.spinner("Generating Image..."):
-            weather = get_weather(weather_key, city)
+        category = classify_weather(code)
+        poster = generate_poster(city, category)
 
-            if "weather" not in weather:
-                st.error("City not found or API error.")
-            else:
-                poster_img = generate_poster(weather, city, width, height, pexels_key)
+        st.image(poster, caption=f"{city} – {category} weather", use_column_width=True)
 
-                buf = BytesIO()
-                poster_img.save(buf, format="PNG")
-                st.image(buf.getvalue(), use_column_width=True)
-
-                st.download_button(
-                    "Download Poster",
-                    buf.getvalue(),
-                    file_name="weather_poster.png",
-                    mime="image/png"
-                )
+        # Download button
+        buf = io.BytesIO()
+        poster.save(buf, format="PNG")
+        st.download_button("Download Poster", buf.getvalue(), file_name=f"{city}_poster.png")
